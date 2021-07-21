@@ -147,6 +147,9 @@ def handle_args() -> Dict[str, Union[str, int]]:
     parser.add_argument('-0', '--print0',
                         action='store_true',
                         help="use \\0 as output separator (for piping to 'xargs -0')")
+    parser.add_argument('-v', '--verbose',
+                        action='store_true',
+                        help="show some statistics about how many files where filteres")
     parser.add_argument('-f', '--force',
                         action='store_true',
                         help="force output even if we would output (almost) everything")
@@ -171,7 +174,8 @@ def handle_args() -> Dict[str, Union[str, int]]:
     return {
         "ors": "\0" if options.print0 else "\n",
         "force": options.force,
-        "min_keep": options.min_keep
+        "min_keep": options.min_keep,
+        "verbose": options.verbose,
     }
 
 
@@ -197,6 +201,9 @@ def main() -> None:
               file=sys.stderr)
         print(f"Override with --force if this is really what you want", file=sys.stderr)
         return
+
+    if options['verbose']:
+        print(f"Keeping {num_to_keep}, discarding {num_to_remove}", file=sys.stderr)
 
     for s in sorted(to_remove):
         print(str_date[s], end=options['ors'])
