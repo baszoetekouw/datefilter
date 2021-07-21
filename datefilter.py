@@ -6,25 +6,19 @@
 import sys
 import re
 from datetime import datetime, timedelta
+from typing import Optional
 from pprint import pprint
 
 DEBUG = True
 NOW = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-filters: list[dict[int]] = [
-    {"period":   5 * 24 * 60 * 60, "frequency":           60 * 60},  # keep hourly for 5 days
-    {"period":  14 * 24 * 60 * 60, "frequency":      24 * 60 * 60},  # after that, keep daily for two weeks
-    {"period":  30 * 24 * 60 * 60, "frequency":  7 * 24 * 60 * 60},  # after that, keep weekly for 90 days
-    {"period": 365 * 24 * 60 * 60, "frequency": 14 * 24 * 60 * 60},  # after that, keep biweekly for a year
+filters_t = list[dict[str, timedelta]]
+FILTERS: filters_t = [
+    {"period": timedelta(days= 14), "frequency": timedelta(hours=1)},  # keep hourly for 2 weeks
+    {"period": timedelta(days= 28), "frequency": timedelta(days= 1)},  # after that, keep daily for 4 weeks
+    {"period": timedelta(days= 90), "frequency": timedelta(days= 7)},  # after that, keep weekly for 90 days
+    {"period": timedelta(days=365), "frequency": timedelta(days=14)},  # after that, keep biweekly for a year
 ]
-
-
-# itereare over time; starting at now, counting backwards with steps of freq for a period of period
-def age_range(period: timedelta, frequency: timedelta):
-    age = timedelta(0)
-    while age < period:
-        yield age
-        age += frequency
 
 
 def debug(*args, **kwargs) -> None:
@@ -37,58 +31,84 @@ def pdebug(*args, **kwargs) -> None:
         pprint(*args, **kwargs)
 
 
-# read dates from stdin
-dates: list[datetime] = []
-date_re = re.compile('[0-9][0-9_:-]+')
-for line in sys.stdin:
-    this_date = datetime.fromisoformat(line.rstrip())
-    dates.append(this_date)
+# extract an iso8601-like part of a string and return the corresponding date
+def date_from_string(s: str) -> Optional[datetime]:
+    # regexp to extract date from strings
+    iso8601_regex = r'[0-9]{4}-?[01]\d-?[0123]\d[_T][012]\d:?[0-5]\d(?::?[0-]5\d)?'
+    date_re = re.compile(iso8601_regex)
 
-dates.sort(reverse=True)
-pdebug(dates)
-
-to_keep: set[datetime] = set()
-try:
-    date_iter = iter(dates)
-    the_date = next(date_iter)
-    age = timedelta(0)
-    for current_filter in sorted(filters, key=lambda d: d['period']):
-        period    = timedelta(seconds=current_filter['period'])
-        frequency = timedelta(seconds=current_filter['frequency'])
-        debug(period, frequency)
-        while age < period:
-            debug(f"  {age}")
-            while the_date:
-                date_age = NOW - the_date
-                debug(f"     considering {age} for date {date_age}")
-                if age < date_age:
-                    break
-                elif age >= date_age and age < date_age + frequency:
-                    debug(f" --> found {the_date}")
-                    to_keep.add(the_date)
-                    the_date = next(date_iter)
-                    # continue counting from the matched date
-                    age = date_age + frequency
-                    break
-                else:
-                    debug(f" --> discarding {the_date}")
-                    the_date = next(date_iter)
-            age += frequency
-except StopIteration:
-    pass
+    m = date_re.search(s)
+    if not m:
+        debug(f"No date found in '{s}'")
+        return None
+    the_date = datetime.fromisoformat(m[0])
+    return the_date
 
 
-to_remove = set(dates) - to_keep
+# read a list of string from stdin and extract dates from each
+# returns a dict of datetime: original_string
+def read_dates() -> dict[datetime, str]:
+    str_date: dict[datetime, str] = {}
 
-if DEBUG:
-    print("=====================")
-    print("Will keep:")
-    for s in sorted(to_keep):
-        print(f"  - {s}")
-    print("Will remove:")
+    # read dates from stdin
+    for line in sys.stdin:
+        s = line.rstrip()
+        the_date = date_from_string(s)
+
+        # make sure dats are unique
+        while the_date in str_date:
+            the_date += timedelta(milliseconds=1)
+
+        str_date[the_date] = s
+
+    return str_date
+
+
+# find the filter frequency corresponding to the given age
+def find_frequency(filters: filters_t, age: timedelta) -> Optional[timedelta]:
+    for filt in sorted(filters, key=lambda p: p['period']):
+        if filt['period'] > age:
+            return filt['frequency']
+    return None
+
+
+def filter_dates(filters: filters_t, dates: list[datetime]) -> set[datetime]:
+    to_keep: set[datetime] = set()
+    last_kept = datetime(year=1970, month=1, day=1)
+
+    for d in sorted(dates):
+        debug(f'Considering date={str(d)}')
+        age = NOW - d
+        freq = find_frequency(filters, age)
+        debug(f'  since last kept: {str(d-last_kept)}')
+        debug(f'  freq is {freq}')
+        if freq and d-last_kept > freq:
+            debug(f'  keeping')
+            to_keep.add(d)
+            last_kept = d
+        else:
+            debug(f'  discarding')
+
+    return to_keep
+
+
+def main():
+    str_date = read_dates()
+
+    dates = sorted(list(str_date.keys()), reverse=True)
+
+    to_keep = filter_dates(FILTERS, dates)
+    to_remove = set(dates) - to_keep
+
+    if DEBUG:
+        print("=====================")
+        for d in dates:
+            print(f'{str_date[d]} {d}: {"keeping" if d in to_keep else "REMOVE"}')
+        print("=====================")
+
     for s in sorted(to_remove):
-        print(f"  - {s}")
-    print("=====================")
+        print(s)
 
-for s in sorted(to_remove):
-    print(s)
+
+if __name__ == "__main__":
+    main()
