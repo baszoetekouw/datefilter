@@ -7,7 +7,7 @@ import sys
 import re
 import argparse
 from datetime import datetime, timedelta
-from typing import Optional, Any, Dict, List, Set, Union
+from typing import Optional, Any, Dict, List, Set, Union, Tuple
 
 DEBUG = False
 ORS = "\n"  # output record separator
@@ -72,7 +72,7 @@ def show_filter(filters: filters_t) -> None:
 
 
 # extract an iso8601-like part of a string and return the corresponding date
-def date_from_string(s: str) -> Optional[datetime]:
+def date_from_string(s: str) -> Optional[Tuple[datetime, str]]:
     # regexp to extract date from strings
     iso8601_regex = r'[0-9]{4}-?[01]\d-?[0123]\d[_T][012]\d:?[0-5]\d(?::?[0-]5\d)?'
     date_re = re.compile(iso8601_regex)
@@ -82,24 +82,35 @@ def date_from_string(s: str) -> Optional[datetime]:
         debug(f"No date found in '{s}'")
         return None
     the_date = datetime.fromisoformat(m[0])
-    return the_date
+    postfix = s[m.end():]
+    debug(f"Translated string '{s}' to date {the_date} with postfix '{postfix}'")
+    return the_date, postfix
 
 
 # read a list of string from stdin and extract dates from each
+# if unique_postfix is set, treat files with different postfixes separately
 # returns a dict of datetime: original_string
-def read_dates() -> Dict[datetime, str]:
-    str_date: Dict[datetime, str] = {}
+def read_dates(unique_postfix: bool = False) -> Dict[str, Dict[datetime, str]]:
+    # data structure looks like this:
+    # { ".postfix": { datetime(2021,07,07): "somefile_2021-07-07.postfix" }
+    str_date: Dict[str, Dict[datetime, str]] = {}
 
     # read dates from stdin
     for line in sys.stdin:
         s = line.rstrip()
-        the_date = date_from_string(s)
+        the_date, the_postfix = date_from_string(s)
 
-        # make sure dats are unique
-        while the_date in str_date:
+        # use a dummy postfix if we unique_postfix is nto set
+        postfix_key = the_postfix if unique_postfix else '_'
+        # make sure postfix exists in result dict
+        if postfix_key not in str_date:
+            str_date[postfix_key] = {}
+
+        # make sure dates are unique
+        while the_date in str_date[postfix_key]:
             the_date += timedelta(milliseconds=1)
 
-        str_date[the_date] = s
+        str_date[postfix_key][the_date] = s
 
     return str_date
 
@@ -132,7 +143,7 @@ def filter_dates(filters: filters_t, dates: List[datetime]) -> Set[datetime]:
     return to_keep
 
 
-def handle_args() -> Dict[str, Union[str, int]]:
+def handle_args() -> argparse.Namespace:
     global DEBUG
 
     parser = argparse.ArgumentParser(
@@ -145,7 +156,10 @@ def handle_args() -> Dict[str, Union[str, int]]:
                         action='store_true',
                         help="show debugging info")
     parser.add_argument('-0', '--print0',
-                        action='store_true',
+                        action='store_const',
+                        const='\0',
+                        default='\n',
+                        dest='ors',
                         help="use \\0 as output separator (for piping to 'xargs -0')")
     parser.add_argument('-v', '--verbose',
                         action='store_true',
@@ -153,6 +167,10 @@ def handle_args() -> Dict[str, Union[str, int]]:
     parser.add_argument('-f', '--force',
                         action='store_true',
                         help="force output even if we would output (almost) everything")
+    parser.add_argument('--unique-postfix',
+                        action='store_true',
+                        dest='unique_postfix',
+                        help="treat files with different postfixes separately")
     parser.add_argument('-s', '--show-filter',
                         action='store_true',
                         dest='show_filter',
@@ -171,42 +189,41 @@ def handle_args() -> Dict[str, Union[str, int]]:
     if options.show_filter:
         show_filter(FILTERS)
 
-    return {
-        "ors": "\0" if options.print0 else "\n",
-        "force": options.force,
-        "min_keep": options.min_keep,
-        "verbose": options.verbose,
-    }
+    return options
 
 
 def main() -> None:
     options = handle_args()
 
-    str_date = read_dates()
-    dates = sorted(list(str_date.keys()), reverse=True)
+    postfix_str_date = read_dates(unique_postfix=options.unique_postfix)
 
-    to_keep = filter_dates(FILTERS, dates)
-    to_remove = set(dates) - to_keep
+    # now iterate over all postfixes
+    for postfix, str_date in postfix_str_date.items():
+        debug(f"Processing postfix '{postfix}'")
+        dates = sorted(list(str_date.keys()), reverse=True)
 
-    if DEBUG:
-        print("=====================")
-        for d in dates:
-            print(f'{str_date[d]} {d}: {"keeping" if d in to_keep else "REMOVE"}')
-        print("=====================")
+        to_keep = filter_dates(FILTERS, dates)
+        to_remove = set(dates) - to_keep
 
-    num_to_keep   = len(to_keep)  # noqa: E221
-    num_to_remove = len(to_remove)
-    if not options['force'] and num_to_remove > 0 and num_to_keep < num_to_remove and num_to_keep < options['min_keep']:
-        print(f"Would remove {num_to_remove} files and keep only {num_to_keep}; respectfully refusing.",
-              file=sys.stderr)
-        print(f"Override with --force if this is really what you want", file=sys.stderr)
-        return
+        if DEBUG:
+            print("=====================")
+            for d in dates:
+                print(f'{str_date[d]} {d}: {"keeping" if d in to_keep else "REMOVE"}')
+            print("=====================")
 
-    if options['verbose']:
-        print(f"Keeping {num_to_keep}, discarding {num_to_remove}", file=sys.stderr)
+        num_to_keep   = len(to_keep)  # noqa: E221
+        num_to_remove = len(to_remove)
+        if not options.force and num_to_remove > 0 and num_to_keep < num_to_remove and num_to_keep < options.min_keep:
+            print(f"Would remove {num_to_remove} files and keep only {num_to_keep}; respectfully refusing.",
+                  file=sys.stderr)
+            print(f"Override with --force if this is really what you want", file=sys.stderr)
+            return
 
-    for s in sorted(to_remove):
-        print(str_date[s], end=options['ors'])
+        if options.verbose:
+            print(f"Keeping {num_to_keep}, discarding {num_to_remove}", file=sys.stderr)
+
+        for s in sorted(to_remove):
+            print(str_date[s], end=options.ors)
 
 
 if __name__ == "__main__":
