@@ -33,6 +33,44 @@ def debug(*args, **kwargs) -> None:
         print(*args, **kwargs, file=sys.stderr)
 
 
+def td_format(td_object: timedelta) -> str:
+    periods = [
+        ('year',        60*60*24*365),
+        ('month',       60*60*24*30),
+        ('week',        60*60*24*7),
+        ('day',         60*60*24),
+        ('hour',        60*60),
+        ('minute',      60),
+        ('second',      1)
+    ]
+
+    strings: List[str] = []
+    seconds = int(td_object.total_seconds())
+    for period_name, period_seconds in periods:
+        if seconds >= period_seconds:
+            period_value, seconds = divmod(seconds, period_seconds)
+            if period_value > 1:
+                plural = 's'
+                period_value = str(period_value) + " "
+            else:
+                plural = ''
+                period_value = ''
+            strings.append(f"{period_value}{period_name}{plural}")
+
+    return ", ".join(strings)
+
+
+def show_filter(filters: filters_t) -> None:
+    print("Current filter rules:")
+    for filt in filters:
+        p = filt['period']
+        f = filt['frequency']
+
+        print(f' - keep a file every {td_format(f)} for the past {td_format(p)}')
+
+    sys.exit(0)
+
+
 # extract an iso8601-like part of a string and return the corresponding date
 def date_from_string(s: str) -> Optional[datetime]:
     # regexp to extract date from strings
@@ -97,7 +135,12 @@ def filter_dates(filters: filters_t, dates: List[datetime]) -> Set[datetime]:
 def handle_args() -> Dict[str, Union[str, int]]:
     global DEBUG
 
-    parser = argparse.ArgumentParser(description='Read a list of files and returns the ones to discard')
+    parser = argparse.ArgumentParser(
+        description="""
+            Read a list of strings from stdin, extracts a date out of each one and returns
+            the ones to discard according to a filter spec
+        """
+    )
     parser.add_argument('-d', '--debug',
                         action='store_true',
                         help="show debugging info")
@@ -107,6 +150,10 @@ def handle_args() -> Dict[str, Union[str, int]]:
     parser.add_argument('-f', '--force',
                         action='store_true',
                         help="force output even if we would output (almost) everything")
+    parser.add_argument('-s', '--show-filter',
+                        action='store_true',
+                        dest='show_filter',
+                        help="the the current filter rules")
     parser.add_argument('-m', '--min-keep',
                         action='store',
                         type=int,
@@ -118,6 +165,9 @@ def handle_args() -> Dict[str, Union[str, int]]:
     if options.debug:
         DEBUG = True
 
+    if options.show_filter:
+        show_filter(FILTERS)
+
     return {
         "ors": "\0" if options.print0 else "\n",
         "force": options.force,
@@ -125,7 +175,7 @@ def handle_args() -> Dict[str, Union[str, int]]:
     }
 
 
-def main():
+def main() -> None:
     options = handle_args()
 
     str_date = read_dates()
