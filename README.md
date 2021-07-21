@@ -7,6 +7,8 @@ cd /backups && ls | datefilter -print0 | xargs -0 rm
 ```
 will make a decent selection of files to remove.
 
+Note that `datefilter` will try to extract a date (in iso8601-like format) from the input strings; it doesn't actually look at the file dates or anything like that.
+
 By default, it will use the following filter specification:
  - keep a file every hour for the past 2 weeks
  - keep a file every day for the past 4 weeks
