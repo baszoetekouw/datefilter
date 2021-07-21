@@ -1,34 +1,36 @@
 #!/usr/bin/env python3
 
-# this script takes a nuber of datetimes as input and a selection filter, and returns the dates which should be removed
-# form the list to comply to the selection filter
+# this script takes a number of string containing iso8601-like dates as input and a selection filter,
+# and returns the dates which should be removed from the list to comply to the selection filter
 
 import sys
 import re
+import argparse
 from datetime import datetime, timedelta
-from typing import Optional
-from pprint import pprint
+from typing import Optional, Any, Dict, List, Set, Union
 
-DEBUG = True
-NOW = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+DEBUG = False
+ORS = "\n"  # output record separator
 
-filters_t = list[dict[str, timedelta]]
+#NOW = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+NOW = datetime.now()
+
+try:
+    filters_t = List[Dict[str, timedelta]]
+except TypeError:
+    filters_t = Any
+
 FILTERS: filters_t = [
-    {"period": timedelta(days= 14), "frequency": timedelta(hours=1)},  # keep hourly for 2 weeks
-    {"period": timedelta(days= 28), "frequency": timedelta(days= 1)},  # after that, keep daily for 4 weeks
-    {"period": timedelta(days= 90), "frequency": timedelta(days= 7)},  # after that, keep weekly for 90 days
-    {"period": timedelta(days=365), "frequency": timedelta(days=14)},  # after that, keep biweekly for a year
+    {"period": timedelta(days= 14), "frequency": timedelta(hours=1)},  # keep hourly for 2 weeks  # noqa: E251
+    {"period": timedelta(days= 28), "frequency": timedelta(days= 1)},  # keep daily for 4 weeks   # noqa: E251
+    {"period": timedelta(days= 90), "frequency": timedelta(days= 7)},  # keep weekly for 90 days  # noqa: E251
+    {"period": timedelta(days=365), "frequency": timedelta(days=14)},  # keep biweekly for a year # noqa: E251
 ]
 
 
 def debug(*args, **kwargs) -> None:
     if DEBUG:
-        print(*args, **kwargs)
-
-
-def pdebug(*args, **kwargs) -> None:
-    if DEBUG:
-        pprint(*args, **kwargs)
+        print(*args, **kwargs, file=sys.stderr)
 
 
 # extract an iso8601-like part of a string and return the corresponding date
@@ -47,8 +49,8 @@ def date_from_string(s: str) -> Optional[datetime]:
 
 # read a list of string from stdin and extract dates from each
 # returns a dict of datetime: original_string
-def read_dates() -> dict[datetime, str]:
-    str_date: dict[datetime, str] = {}
+def read_dates() -> Dict[datetime, str]:
+    str_date: Dict[datetime, str] = {}
 
     # read dates from stdin
     for line in sys.stdin:
@@ -72,8 +74,8 @@ def find_frequency(filters: filters_t, age: timedelta) -> Optional[timedelta]:
     return None
 
 
-def filter_dates(filters: filters_t, dates: list[datetime]) -> set[datetime]:
-    to_keep: set[datetime] = set()
+def filter_dates(filters: filters_t, dates: List[datetime]) -> Set[datetime]:
+    to_keep: Set[datetime] = set()
     last_kept = datetime(year=1970, month=1, day=1)
 
     for d in sorted(dates):
@@ -92,9 +94,41 @@ def filter_dates(filters: filters_t, dates: list[datetime]) -> set[datetime]:
     return to_keep
 
 
-def main():
-    str_date = read_dates()
+def handle_args() -> Dict[str, Union[str, int]]:
+    global DEBUG
 
+    parser = argparse.ArgumentParser(description='Read a list of files and returns the ones to discard')
+    parser.add_argument('-d', '--debug',
+                        action='store_true',
+                        help="show debugging info")
+    parser.add_argument('-0', '--print0',
+                        action='store_true',
+                        help="use \\0 as output separator (for piping to 'xargs -0')")
+    parser.add_argument('-f', '--force',
+                        action='store_true',
+                        help="force output even if we would output (almost) everything")
+    parser.add_argument('-m', '--min-keep',
+                        action='store',
+                        type=int,
+                        default=10,
+                        dest='min_keep',
+                        help="minimum number of file to keep (default: 10)")
+    options = parser.parse_args()
+
+    if options.debug:
+        DEBUG = True
+
+    return {
+        "ors": "\0" if options.print0 else "\n",
+        "force": options.force,
+        "min_keep": options.min_keep
+    }
+
+
+def main():
+    options = handle_args()
+
+    str_date = read_dates()
     dates = sorted(list(str_date.keys()), reverse=True)
 
     to_keep = filter_dates(FILTERS, dates)
@@ -106,8 +140,16 @@ def main():
             print(f'{str_date[d]} {d}: {"keeping" if d in to_keep else "REMOVE"}')
         print("=====================")
 
+    num_to_keep   = len(to_keep)  # noqa: E221
+    num_to_remove = len(to_remove)
+    if not options['force'] and num_to_remove > 0 and num_to_keep < num_to_remove and num_to_keep < options['min_keep']:
+        print(f"Would remove {num_to_remove} files and keep only {num_to_keep}; respectfully refusing.",
+              file=sys.stderr)
+        print(f"Override with --force if this is really what you want", file=sys.stderr)
+        return
+
     for s in sorted(to_remove):
-        print(s)
+        print(str_date[s], end=options['ors'])
 
 
 if __name__ == "__main__":
